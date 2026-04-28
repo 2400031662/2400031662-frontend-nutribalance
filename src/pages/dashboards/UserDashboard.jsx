@@ -1928,7 +1928,7 @@ function UserDashboard() {
               to="/dashboard/user/ai-scanner"
               className="block rounded-full border border-slate-200 bg-slate-50 px-3 py-2 text-left font-medium text-slate-700 hover:bg-slate-100"
             >
-              Open AI Food Scanner
+              Open AI Plate Supporter
             </Link>
             <Link
               to="/dashboard/user/deep-dive/scanner"

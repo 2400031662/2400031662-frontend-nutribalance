@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { Line, Doughnut, Bar } from "react-chartjs-2";
 import {
@@ -15,11 +15,13 @@ import {
 import {
   getAssignedUsersForNutritionist,
   getLoggedInNutritionist,
+  loadFoodScans,
   loadDailyRoutine,
   loadAppointments,
   loadPointsLedger,
   saveDailyRoutine,
   savePointsLedger,
+  saveFoodScans,
 } from "../../lib/wellness.js";
 
 ChartJS.register(
@@ -44,12 +46,15 @@ function NutritionistDashboard() {
   const [reviewRoutine, setReviewRoutine] = useState([]);
   const [assignedUsers, setAssignedUsers] = useState([]);
   const [appointments, setAppointments] = useState([]);
+  const [mealPhotoReviews, setMealPhotoReviews] = useState([]);
+  const [mealPointDrafts, setMealPointDrafts] = useState({});
   const [consultationsToday, setConsultationsToday] = useState(6);
   const [completedToday, setCompletedToday] = useState(2);
   const [pendingUpdates, setPendingUpdates] = useState(3);
   const [weeklyConsultations, setWeeklyConsultations] = useState([4, 5, 6, 5, 7, 4, 6]);
   const [usersOverWeek, setUsersOverWeek] = useState([18, 19, 20, 21, 22, 23, 24]);
   const [nightRecordAccepted, setNightRecordAccepted] = useState(false);
+  const mealReviewRef = useRef(null);
 
   useEffect(() => {
     const currentUser =
@@ -62,6 +67,24 @@ function NutritionistDashboard() {
     setReviewRoutine(loadDailyRoutine());
     setAssignedUsers(getAssignedUsersForNutritionist(currentProfile));
     setAppointments(loadAppointments());
+    setMealPhotoReviews(loadFoodScans());
+  }, []);
+
+  useEffect(() => {
+    const syncMealReviews = () => {
+      setMealPhotoReviews(loadFoodScans());
+    };
+
+    if (typeof window === "undefined") {
+      return undefined;
+    }
+
+    window.addEventListener("storage", syncMealReviews);
+    window.addEventListener("focus", syncMealReviews);
+    return () => {
+      window.removeEventListener("storage", syncMealReviews);
+      window.removeEventListener("focus", syncMealReviews);
+    };
   }, []);
 
   const upcomingToday = consultationsToday - completedToday;
@@ -75,6 +98,17 @@ function NutritionistDashboard() {
   const pendingAppointmentCount = nutritionistAppointments.filter(
     (item) => item.status !== "Completed",
   ).length;
+  const pendingMealReviewCount = mealPhotoReviews.filter(
+    (item) => !Number(item.pointsAwarded || 0),
+  ).length;
+  const awardedMealPoints = useMemo(
+    () =>
+      mealPhotoReviews.reduce(
+        (sum, item) => sum + Number(item.pointsAwarded || 0),
+        0,
+      ),
+    [mealPhotoReviews],
+  );
   const currentAppointmentNames = useMemo(
     () => nutritionistAppointments.slice(0, 3).map((item) => item.reason || item.time),
     [nutritionistAppointments],
@@ -107,6 +141,13 @@ function NutritionistDashboard() {
   const completeConsultation = () => {
     if (upcomingToday <= 0) return;
     setCompletedToday((c) => c + 1);
+  };
+
+  const openMealReviewSection = () => {
+    mealReviewRef.current?.scrollIntoView({
+      behavior: "smooth",
+      block: "start",
+    });
   };
 
   const approveAllPending = () => {
@@ -154,6 +195,53 @@ function NutritionistDashboard() {
       itemId,
       label: target.title,
       points: Number(target.points || 0),
+    });
+    savePointsLedger(ledger);
+  };
+
+  const approveMealPhotoItem = (itemId) => {
+    const now = new Date();
+    const weekIndex = (now.getDay() + 6) % 7;
+    const currentScans = loadFoodScans();
+    const target = currentScans.find((item) => item.id === itemId);
+
+    if (!target || Number(target.pointsAwarded || 0) > 0) {
+      return;
+    }
+
+    const draftValue = Number(
+      mealPointDrafts[itemId] ?? target.suggestedPoints ?? 8,
+    );
+    const points =
+      Number.isFinite(draftValue) && draftValue > 0 ? draftValue : 8;
+
+    const updatedScans = currentScans.map((item) =>
+      item.id === itemId
+        ? {
+            ...item,
+            status: "Accepted",
+            pointsAwarded: points,
+            reviewedBy: nutritionist.name,
+            reviewedAt: now.toISOString(),
+          }
+        : item,
+    );
+
+    saveFoodScans(updatedScans);
+    setMealPhotoReviews(updatedScans);
+
+    const ledger = loadPointsLedger();
+    ledger.push({
+      date: now.toISOString().slice(0, 10),
+      weekIndex,
+      source: "meal-photo-approval",
+      itemId,
+      label: target.label,
+      points,
+      userName: target.userName || "User",
+      hint: target.hint || "",
+      fileName: target.fileName || "",
+      reviewedBy: nutritionist.name,
     });
     savePointsLedger(ledger);
   };
@@ -229,6 +317,21 @@ function NutritionistDashboard() {
           <p className="text-xs text-slate-500">
             Overview of today&apos;s consultations, assigned users, and daily approvals.
           </p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={openMealReviewSection}
+              className="rounded-full bg-primary px-3 py-1.5 text-[11px] font-medium text-white hover:bg-primary/90"
+            >
+              Open meal award section
+            </button>
+            <Link
+              to="/dashboard/nutritionist/deep-dive/points"
+              className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-[11px] font-medium text-slate-700 hover:bg-slate-50"
+            >
+              Points deep view
+            </Link>
+          </div>
         </div>
 
         <div className="flex items-center gap-3 rounded-2xl bg-white px-4 py-2 shadow-sm">
@@ -620,6 +723,117 @@ function NutritionistDashboard() {
           </div>
           <div className="rounded-2xl border border-slate-100 bg-slate-50 p-3 text-[11px] text-slate-600">
             Weekly round-up: {weeklyGroupCount} mapped users, {pendingAppointmentCount} open appointments, and {pendingReviewCount} uploads awaiting approval.
+          </div>
+        </section>
+
+        <section
+          ref={mealReviewRef}
+          id="meal-reviews"
+          className="space-y-3 rounded-3xl border border-slate-100 bg-white p-5 shadow-sm text-xs md:col-span-2"
+        >
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-emerald-700">
+                AI meal supporter
+              </p>
+              <h2 className="text-sm font-semibold text-slate-900">
+                Meal photo reviews and points
+              </h2>
+              <p className="text-[11px] text-slate-500">
+                Review the user&apos;s meal upload, enter the points you want to award, and save it back to the user portal.
+              </p>
+            </div>
+            <div className="rounded-2xl bg-emerald-50 px-3 py-2 text-[11px] text-emerald-800">
+              {pendingMealReviewCount} pending, {awardedMealPoints} awarded
+            </div>
+          </div>
+
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+            {mealPhotoReviews.length === 0 ? (
+              <p className="text-sm text-slate-400">
+                No meal uploads have been sent yet.
+              </p>
+            ) : (
+              mealPhotoReviews.map((item) => {
+                const draftValue =
+                  mealPointDrafts[item.id] ?? item.suggestedPoints ?? 8;
+
+                return (
+                  <div
+                    key={item.id}
+                    className="rounded-2xl border border-slate-100 bg-slate-50 p-3"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="font-semibold text-slate-800">
+                          {item.label}
+                        </p>
+                        <p className="text-[11px] text-slate-500">
+                          {item.time} • {item.userName || "User"}
+                        </p>
+                      </div>
+                      <span
+                        className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
+                          item.pointsAwarded > 0
+                            ? "bg-emerald-50 text-emerald-700"
+                            : "bg-amber-50 text-amber-700"
+                        }`}
+                      >
+                        {item.pointsAwarded > 0 ? "Awarded" : "Pending"}
+                      </span>
+                    </div>
+
+                    {item.photoUrl && (
+                      <img
+                        src={item.photoUrl}
+                        alt={item.label}
+                        className="mt-2 h-32 w-full rounded-2xl object-cover"
+                      />
+                    )}
+
+                    <p className="mt-2 text-[11px] text-slate-600">
+                      {item.guideTitle}
+                    </p>
+                    <p className="mt-1 text-[11px] text-slate-500">
+                      Suggested points: {item.suggestedPoints || 8}
+                    </p>
+
+                    <label className="mt-3 block text-[11px] font-medium text-slate-700">
+                      Award points
+                    </label>
+                    <input
+                      type="number"
+                      min="1"
+                      max="100"
+                      value={draftValue}
+                      onChange={(e) =>
+                        setMealPointDrafts((prev) => ({
+                          ...prev,
+                          [item.id]: e.target.value,
+                        }))
+                      }
+                      className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none ring-primary/30 focus:ring"
+                    />
+
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => approveMealPhotoItem(item.id)}
+                        disabled={item.pointsAwarded > 0}
+                        className="rounded-full bg-primary px-3 py-1.5 text-[11px] font-medium text-white hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-70"
+                      >
+                        Award points
+                      </button>
+                      <span className="rounded-full bg-white px-2 py-1 text-[10px] font-medium text-slate-500">
+                        {item.pointsAwarded > 0
+                          ? `${item.pointsAwarded} pts saved`
+                          : "Waiting for review"}
+                      </span>
+                    </div>
+                  </div>
+                );
+              })
+            )}
           </div>
         </section>
       </div>
